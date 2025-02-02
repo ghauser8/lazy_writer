@@ -12,10 +12,10 @@ A subtask: create a "generator generator" that will create a user-defined
     generator on demand. User passes an index, an iterable compatible with the 
     specified index, and a str literal to represent the variable of iterest.
 
-DESIRED USAGE:
+DESIRED USAGE (something like):
 
 m = lazy_writer.Model()
-m.add_variable(name='x', default_index = (i for i in range(4)))
+m.add_variable(name='x', default_index = lambda: (i for i in range(4)))
 m.add_constraints(sum('x', data, 'i for i in range(len(data))') <= 50)
 m.add_variable('x', default_index)
 m.add_constraints(sum(m.x, coefficients, index) + sum(m.x, coefficients) <= 
@@ -32,10 +32,39 @@ class Model:
         self.objective = None
         self.constraints = {}
 
-    # user has to pass default_index = lambda: (gener) for this
-    # to work.
-    def add_variable(self, name, variable_type, default_index):
+    # user has to pass default_index = lambda: (gener) and you have to call it
+    # like m.variables['x']['default_index']() for this to work.
+    def add_variable(self, name, variable_type, upper_bounds, lower_bounds,
+                     default_index):
+        '''
+        name (str): user-defined variable name, e.g. 'x'
+        variable_type (str): variable type, e.g. 'Binary'
+        upper_bounds (iterable | float | int): upper bounds of variable. 
+            If iterable, assumed to be indexed on default_index; if float or 
+            int, the single bound value is applied to every index of the 
+            variable
+        lower_bounds (iterable | float | int): see upper_bounds
+        default_index (lambda): (preferably) a generator wrapped in a lambda 
+            function, e.g. lambda (i for i in my_data if i == my_condition)
+
+        DESCRIPTION: record within the model object all of the information 
+            required to use a variable easily when writing. everything in the 
+            Model.variables dict is a callable (except for 'variable_type') 
+            by way of lambdas; ideally, each lambda returns a generator as 
+            defined by the user when defining the variable.
+        '''
+        # If user passed a scalar for one of the bounds, transform it into a 
+        #   lambda for them so that usage will be identical to the case where
+        #   they pass a lambda-wrapped generator.
+        if type(upper_bounds) in [int, float]:
+            upper_bounds = lambda: upper_bounds
+
+        if type(lower_bounds) in [int, float]:
+            lower_bounds = lambda: lower_bounds
+
         self.variables[name] = {'variable_type': variable_type,
+                                'upper_bounds': upper_bounds,
+                                'lower_bounds': lower_bounds,
                                 'default_index': default_index} 
 
     class Variable:
