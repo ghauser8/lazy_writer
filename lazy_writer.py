@@ -15,22 +15,23 @@ A subtask: create a "generator generator" that will create a user-defined
 DESIRED USAGE (something like):
 
 m = lazy_writer.Model()
+
 m.add_variable(name='x', default_index = lambda: (i for i in range(4)))
+
 m.add_constraints(sum('x', data, 'i for i in range(len(data))') <= 50)
+
 m.add_variable('x', default_index)
+
 m.add_constraints(sum(m.x, coefficients, index) + sum(m.x, coefficients) <= 
     rhs[j], constraint_index)
 '''
-
-
-
-
 
 class Model:
     def __init__(self):
         self.variables = {}
         self.objective = None
         self.constraints = {}
+        self.constraint_block = 0
 
     # user has to pass default_index = lambda: (gener) and you have to call it
     # like m.variables['x']['default_index']() for this to work.
@@ -55,7 +56,7 @@ class Model:
         '''
         # If user passed a scalar for one of the bounds, transform it into a 
         #   lambda for them so that usage will be identical to the case where
-        #   they pass a lambda-wrapped generator.
+        #   they pass a lw-generator.
         if type(upper_bounds) in [int, float]:
             upper_bounds = lambda: upper_bounds
 
@@ -66,34 +67,96 @@ class Model:
                                 'upper_bounds': upper_bounds,
                                 'lower_bounds': lower_bounds,
                                 'default_index': default_index} 
+    
+    def add_objective(self, expression):
+        '''
+        expression (list of generators): the linear expression passed by the 
+            user
 
-    class Variable:
-        def __init__(self, name, variable_type, default_index = None):
-            self.name = name
-            self.type = variable_type
-            self.default_index = default_index
-           
-        
-        def sum(self, coefficients = None, index = None):
-            '''
-            coefficients (list | dict): container for coefficients, indexed 
-                safely on index or self.default_index
-                
-            index (iterable): desired summation index; should be a subset of
-                self.default_index but that is not enforced.
+        DESCRIPTION: store the expression passed by the user and prepare it for
+            lazy writing. The form of expression is still TBD; likely accept 
+            both a string literal and some kind of list of generators.
+        '''
+        self.objective = expression
 
-            DESCRIPTION: return a generator for writing a sum of the variable
-            '''
-            if index is None and self.default_index is None:
-                print(f'No default_index for {self.name}; \
-                        please pass an index')
-                raise ValueError
+    def add_constraints(self, expression, index):
+        '''
+        expression (list of lw-generators | str): linear expression passed by 
+        the user
 
-            if coefficients is None:
-                return (f'{self.name}{i}' + ' + \n' for i in index)    
-            
-            return (f'{coefficients[i]} {self.name}{i}' + ' + \n' 
-                    for i in index) 
+        index (lambda function): a lw-generator defining
+            the index to write the constraints against
+
+        DESCRIPTION: store the rules to create the appropriate constraint block
+        '''
+        self.constraints[self.constraint_block] = (expression, index)
+        self.constraint_block += 1
+
+
+    def sum(self, var, coefficients = None, index = None):
+        '''
+        var (str): string repr of var to sum; var in self.variables must be true
+
+        coefficients (iterable): iterable object that is indexed on at least 
+            index if not also var's default_index; passing None omits 
+            coefficients altogether
+
+        index (lambda): lw-generator defining the index to sum the 
+            variable over instead of the variable's default index. If None and 
+            var in self.variables, variable default index will be used.
+
+        DESCRIPTION: A utility to allow users to express large summations 
+            concisely and lazily.
+        '''
+        if not index:
+            try:
+                index = self.variables[var]['default_index']
+
+            except KeyError:
+                raise ValueError(f'Unrecognized variable name {var}')
+
+        if not coefficients:
+            return lambda: (f'{var}_{i}' for i in index)
+        else:
+            return lambda: (f'{coefficients[i]} {var}_{i}' for i in index)
+
+
+
+
+    def write(self, output_file):
+        '''
+        output_file (str): path to output file
+        DESCRIPTION: write model to .lp file
+        '''
+        pass
+
+    #class Variable:
+    #    def __init__(self, name, variable_type, default_index = None):
+    #        self.name = name
+    #        self.type = variable_type
+    #        self.default_index = default_index
+    #       
+    #    
+    #    def sum(self, coefficients = None, index = None):
+    #        '''
+    #        coefficients (list | dict): container for coefficients, indexed 
+    #            safely on index or self.default_index
+    #            
+    #        index (iterable): desired summation index; should be a subset of
+    #            self.default_index but that is not enforced.
+
+    #        DESCRIPTION: return a generator for writing a sum of the variable
+    #        '''
+    #        if index is None and self.default_index is None:
+    #            print(f'No default_index for {self.name}; \
+    #                    please pass an index')
+    #            raise ValueError
+
+    #        if coefficients is None:
+    #            return (f'{self.name}{i}' + ' + \n' for i in index)    
+    #        
+    #        return (f'{coefficients[i]} {self.name}{i}' + ' + \n' 
+    #                for i in index) 
 
 
 
