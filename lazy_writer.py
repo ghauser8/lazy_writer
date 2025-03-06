@@ -1,5 +1,6 @@
 import os
 import math
+import types
 
 
 '''
@@ -29,14 +30,38 @@ m.add_constraints(sum(m.x, coefficients, index) + sum(m.x, coefficients) <=
 class Model:
     def __init__(self):
         self.variables = {}
-        self.objective = None
         self.constraints = {}
         self.constraint_block = 0
+        self.var_types = [
+                'Real',
+                'nonnegative_Real',
+                'nonpositive_Real',
+                'positive_Real',
+                'negative_Real',
+                'Integer',
+                'nonnegative_Integer',
+                'nonpositive_Integer',
+                'positive_Integer',
+                'negative_Integer',
+                'Binary'
+        ]
+        self.expr_types = [str, 
+                           types.FunctionType, 
+                           types.LambdaType,
+                           list]
 
+    def check_expr(self, expr):
+        if type(expr) not in self.expr_types:
+            raise ValueError(f'Bad expression: {expr}')
+         
     # user has to pass default_index = lambda: (gener) and you have to call it
     # like m.variables['x']['default_index']() for this to work.
-    def add_variable(self, name, variable_type, upper_bounds, lower_bounds,
-                     default_index):
+    def add_variable(self, 
+                     name, 
+                     variable_type, 
+                     upper_bounds = None,
+                     lower_bounds = None,
+                     default_index = None):
         '''
         name (str): user-defined variable name, e.g. 'x'
         variable_type (str): variable type, e.g. 'Binary'
@@ -54,6 +79,10 @@ class Model:
             by way of lambdas; ideally, each lambda returns a generator as 
             defined by the user when defining the variable.
         '''
+        # check for valid variable type
+        if variable_type not in self.var_types:
+            raise ValueError(f"Bad variable_type: {variable_type}")
+
         # If user passed a scalar for one of the bounds, transform it into a 
         #   lambda for them so that usage will be identical to the case where
         #   they pass a lw-generator.
@@ -68,29 +97,55 @@ class Model:
                                 'lower_bounds': lower_bounds,
                                 'default_index': default_index} 
     
-    def add_objective(self, expression):
+    def add_objective(self, expression, sense):
         '''
         expression (list of generators): the linear expression passed by the 
             user
+
+        sense (str): min or max
 
         DESCRIPTION: store the expression passed by the user and prepare it for
             lazy writing. The form of expression is still TBD; likely accept 
             both a string literal and some kind of list of generators.
         '''
-        self.objective = expression
+        # check that expression is either a string or a list of lambdas
+        self.check_expr(expression)
 
-    def add_constraints(self, expression, index):
+        # check objective sense
+        if sense not in ['MIN','MAX']:
+            raise ValueError(f'Bad sense: {sense}')
+
+        if type(expression) == list:
+            self.objective_expr = expression
+        else:
+            self.objective_expr = [expression]
+
+        self.objective_sense = sense
+
+    def add_constraints(self, expression, sense, rhs, index, block_name = None):
         '''
         expression (list of lw-generators | str): linear expression passed by 
         the user
+
+        sense (str): the sense of the constraint, e.g., '<=', '>=', '=='
+
+        rhs (int | float | iterable): the right-hand-side of the constraint
+            if iterable, must be indexable on `index`
 
         index (lambda function): a lw-generator defining
             the index to write the constraints against
 
         DESCRIPTION: store the rules to create the appropriate constraint block
         '''
-        self.constraints[self.constraint_block] = (expression, index)
-        self.constraint_block += 1
+
+        self.check_expr(expression)
+        if not block_name:
+            self.constraints[self.constraint_block] = (expression, sense, 
+                                                       rhs, index)
+            self.constraint_block += 1
+        else:
+            self.constraints[block_name] = (expression, sense, index)
+
 
 
     def sum(self, var, coefficients = None, index = None):
@@ -116,9 +171,9 @@ class Model:
                 raise ValueError(f'Unrecognized variable name {var}')
 
         if not coefficients:
-            return lambda: (f'{var}_{i}' for i in index)
+            return lambda: (f'{var}_{i}' for i in index())
         else:
-            return lambda: (f'{coefficients[i]} {var}_{i}' for i in index)
+            return lambda: (f'{coefficients[i]} {var}_{i}' for i in index())
 
 
 
@@ -128,36 +183,65 @@ class Model:
         output_file (str): path to output file
         DESCRIPTION: write model to .lp file
         '''
-        pass
+        
+        with open(output_file, 'w') as f:
+            # first write the objective function
+            f.write(f'{self.objective_sense}\n')
+            self.write_expr(f, self.objective_expr)
 
-    #class Variable:
-    #    def __init__(self, name, variable_type, default_index = None):
-    #        self.name = name
-    #        self.type = variable_type
-    #        self.default_index = default_index
-    #       
-    #    
-    #    def sum(self, coefficients = None, index = None):
-    #        '''
-    #        coefficients (list | dict): container for coefficients, indexed 
-    #            safely on index or self.default_index
-    #            
-    #        index (iterable): desired summation index; should be a subset of
-    #            self.default_index but that is not enforced.
+            # next write constraints
+            f.write('ST\n')
 
-    #        DESCRIPTION: return a generator for writing a sum of the variable
-    #        '''
-    #        if index is None and self.default_index is None:
-    #            print(f'No default_index for {self.name}; \
-    #                    please pass an index')
-    #            raise ValueError
+            # write optional BOUNDS section
 
-    #        if coefficients is None:
-    #            return (f'{self.name}{i}' + ' + \n' for i in index)    
-    #        
-    #        return (f'{coefficients[i]} {self.name}{i}' + ' + \n' 
-    #                for i in index) 
+            # write optional GENERAL section
 
+            # write optional BINARY section
+
+            # write end
+            f.write('end')
+
+        return f'{output_file}'
+
+    def write_expr(self, fobj, expr, appnd = None):
+        '''
+        fobj (file-like object): file object being written to
+        expr (constraint | objective expr): either str or list of generators to 
+            write
+        '''
+        if type(expr) == str:
+            raise ValueError("usage: model.write_str_expr()")
+
+        line = []
+        line_length = 0
+        for lam in expr:
+            comp = lam()
+            while True:
+                try:
+                    next_word = next(comp)
+                    # check for a negative coefficient in next_word
+                    if next_word[0] != '-':
+                        next_word = ' + ' + next_word
+                    line_length += len(next_word)
+                    if line_length <= 80:
+                        # with next_word, we're still beneath the line limit; 
+                        #   so add next_word.
+                        line.append(next_word)
+                    else:
+                        # with next_word, we're over the limit. FIRST write 
+                        #  curernt line, THEN reset line with next_word and  
+                        #   reset line_length
+                        fobj.write(''.join(line + ['\n']))
+                        line = [next_word]
+                        line_length = len(next_word)
+                except StopIteration:
+                    if len(line) > 0:    
+                        # make sure to write any dangling data
+                        fobj.write(''.join(line + ['\n']))
+                    break
+        if appnd:
+            # tack on the sense and rhs of a constraint
+            fobj.write([w for w in appnd] + ['\n'])
 
 
 def dot(a, x, index):
